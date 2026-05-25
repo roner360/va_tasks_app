@@ -548,7 +548,9 @@ def main():
                 st.session_state.pop(key, None)
             st.rerun()
 
-    col_refresh, col_view, col_hide, col_translate, col_info = st.columns([1, 2, 2, 2, 3])
+    hide_future = st.secrets.get("HIDE_FUTURE_TASKS", True)
+
+    col_refresh, col_view, col_translate, col_info = st.columns([1, 2, 2, 5])
     with col_refresh:
         if st.button(s("refresh")):
             fetch_tasks.clear()
@@ -558,8 +560,6 @@ def main():
         view = st.radio(s("view_label"),
                         [s("view_grouped"), s("view_flat")],
                         horizontal=True, label_visibility="collapsed")
-    with col_hide:
-        hide_future = st.toggle("Hide future tasks", value=True)
     with col_translate:
         translate_on = st.toggle(s("translate_toggle"), value=False)
 
