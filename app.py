@@ -6,9 +6,17 @@ Required secrets in .streamlit/secrets.toml:
   BACKEND_URL      — FastAPI backend URL
   BACKEND_API_KEY  — x-api-key required by the backend
   QUIRE_PROJECT_ID — Quire project slug (visible in the URL)
-  DELEGABLE_TAG    — tag to show the VA (default: delegabile)
+  DELEGABLE_TAG    — default tag (fallback if VA has no specific tag)
   TASK_STATUS      — active | completed | all (default: active)
-  VA_PASSWORD      — VA gate password (empty = no gate)
+
+  Multi-VA users (add as many as needed):
+  [va_users.maria]
+  password = "pass_maria"
+  tag = "delegabile"        # optional — overrides DELEGABLE_TAG for this VA
+
+  [va_users.john]
+  password = "pass_john"
+  tag = "delegabile-john"   # VA sees only tasks with this tag
 """
 import streamlit as st
 import requests
@@ -52,6 +60,13 @@ STRINGS = {
         "desc_placeholder":"Add a description...",
         "desc_save":       "Save description",
         "desc_empty":      "No description",
+        "login_title":     "Login",
+        "login_user":      "Username",
+        "login_pwd":       "Password",
+        "login_btn":       "Login",
+        "login_err":       "Wrong username or password.",
+        "logout_btn":      "Logout",
+        "logged_as":       "Logged in as",
     },
     "it": {
         "title":           "Task Delegabili",
@@ -88,6 +103,13 @@ STRINGS = {
         "desc_placeholder":"Aggiungi una descrizione...",
         "desc_save":       "Salva descrizione",
         "desc_empty":      "Nessuna descrizione",
+        "login_title":     "Accesso",
+        "login_user":      "Username",
+        "login_pwd":       "Password",
+        "login_btn":       "Entra",
+        "login_err":       "Username o password errati.",
+        "logout_btn":      "Logout",
+        "logged_as":       "Connesso come",
     },
 }
 
@@ -193,20 +215,42 @@ def _group_key(t: dict) -> tuple[int, str]:
     return (3, s("group_later"))
 
 
-# ── password gate ──────────────────────────────────────────────────────────
+# ── multi-VA login ─────────────────────────────────────────────────────────
 
-def password_gate() -> bool:
-    va_password = st.secrets.get("VA_PASSWORD", "")
-    if not va_password or st.session_state.get("auth_ok"):
+def _va_users() -> dict:
+    """Returns {username: {password, tag}} from secrets."""
+    try:
+        return dict(st.secrets.get("va_users", {}))
+    except Exception:
+        return {}
+
+
+def login_gate() -> bool:
+    """Returns True if a VA is logged in. Stores va_name and va_tag in session."""
+    if st.session_state.get("va_name"):
         return True
-    st.title(s("gate_title"))
-    pwd = st.text_input(s("gate_pwd"), type="password")
-    if st.button(s("gate_btn")):
-        if pwd == va_password:
-            st.session_state["auth_ok"] = True
+
+    users = _va_users()
+    if not users:
+        # No VA users configured — open access
+        st.session_state["va_name"] = "guest"
+        st.session_state["va_tag"]  = st.secrets.get("DELEGABLE_TAG", "delegabile")
+        return True
+
+    st.title(s("login_title"))
+    username = st.text_input(s("login_user")).strip().lower()
+    password = st.text_input(s("login_pwd"), type="password")
+
+    if st.button(s("login_btn")):
+        user_cfg = users.get(username)
+        if user_cfg and password == user_cfg.get("password", ""):
+            st.session_state["va_name"] = username
+            st.session_state["va_tag"]  = (
+                user_cfg.get("tag") or st.secrets.get("DELEGABLE_TAG", "delegabile")
+            )
             st.rerun()
         else:
-            st.error(s("gate_err"))
+            st.error(s("login_err"))
     return False
 
 
@@ -330,20 +374,27 @@ def main():
     if "lang" not in st.session_state:
         st.session_state["lang"] = "en"
 
-    if not password_gate():
+    if not login_gate():
         return
 
     project_id = st.secrets["QUIRE_PROJECT_ID"]
-    tag_name   = st.secrets.get("DELEGABLE_TAG", "delegabile")
+    tag_name   = st.session_state.get("va_tag") or st.secrets.get("DELEGABLE_TAG", "delegabile")
     status     = st.secrets.get("TASK_STATUS", "active")
+    va_name    = st.session_state.get("va_name", "")
 
     # ── top bar ──
-    col_title, col_spacer, col_lang = st.columns([6, 2, 1])
+    col_title, col_spacer, col_va, col_lang, col_logout = st.columns([5, 1, 2, 1, 1])
     with col_title:
         st.title(f"📋 {s('title')}  —  #{tag_name}")
+    with col_va:
+        st.caption(f"{s('logged_as')}: **{va_name}**")
     with col_lang:
         if st.button(s("lang_toggle")):
             st.session_state["lang"] = "it" if st.session_state["lang"] == "en" else "en"
+            st.rerun()
+    with col_logout:
+        if st.button(s("logout_btn")):
+            st.session_state.clear()
             st.rerun()
 
     col_refresh, col_view, col_translate, col_info = st.columns([1, 2, 2, 5])
