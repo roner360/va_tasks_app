@@ -400,26 +400,26 @@ def _task_card(t: dict, translated_name: str | None = None) -> None:
                     else:
                         st.error(err)
 
-            # ── description section ──
+            # ── description section (collapsible) ──
             current_desc = t.get("descriptionText") or t.get("description") or ""
-            desc_key = f"desc_{oid}"
-            new_desc = st.text_area(
-                "",
-                value=st.session_state.get(desc_key, current_desc),
-                placeholder=s("desc_placeholder"),
-                key=f"textarea_{oid}",
-                height=80,
-                label_visibility="collapsed",
-            )
-            if new_desc != current_desc:
-                if st.button(s("desc_save"), key=f"desc_save_{oid}"):
-                    ok, err = update_description(t, new_desc)
-                    if ok:
-                        st.session_state.pop(desc_key, None)
-                        fetch_tasks.clear()
-                        st.rerun()
-                    else:
-                        st.error(err)
+            desc_label = f"📝 {current_desc[:60]}{'…' if len(current_desc) > 60 else ''}" if current_desc else f"📝 {s('desc_placeholder')}"
+            with st.expander(desc_label, expanded=False):
+                new_desc = st.text_area(
+                    "",
+                    value=current_desc,
+                    placeholder=s("desc_placeholder"),
+                    key=f"textarea_{oid}",
+                    height=100,
+                    label_visibility="collapsed",
+                )
+                if new_desc != current_desc:
+                    if st.button(s("desc_save"), key=f"desc_save_{oid}"):
+                        ok, err = update_description(t, new_desc)
+                        if ok:
+                            fetch_tasks.clear()
+                            st.rerun()
+                        else:
+                            st.error(err)
 
             # ── custom fields ──
             custom_fields = _va_custom_fields()
