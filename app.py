@@ -67,6 +67,13 @@ STRINGS = {
         "login_err":       "Wrong username or password.",
         "logout_btn":      "Logout",
         "logged_as":       "Logged in as",
+        "audit_tab":       "Activity log",
+        "audit_filter":    "Filter by VA",
+        "audit_all":       "All",
+        "audit_empty":     "No activity recorded yet.",
+        "audit_action_complete":    "completed",
+        "audit_action_rename":      "renamed",
+        "audit_action_description": "updated description of",
     },
     "it": {
         "title":           "Task Delegabili",
@@ -110,7 +117,20 @@ STRINGS = {
         "login_err":       "Username o password errati.",
         "logout_btn":      "Logout",
         "logged_as":       "Connesso come",
+        "audit_tab":       "Registro attività",
+        "audit_filter":    "Filtra per VA",
+        "audit_all":       "Tutti",
+        "audit_empty":     "Nessuna attività registrata.",
+        "audit_action_complete":    "Ha completato",
+        "audit_action_rename":      "Ha rinominato",
+        "audit_action_description": "Ha modificato la descrizione di",
     },
+}
+
+AUDIT_ACTION_KEYS = {
+    "complete":    ("audit_action_complete",    "✅"),
+    "rename":      ("audit_action_rename",      "✏️"),
+    "description": ("audit_action_description", "📝"),
 }
 
 def s(key: str) -> str:
@@ -153,33 +173,68 @@ def fetch_translations(texts_key: tuple) -> list[str]:
     return r.json()["translations"]
 
 
-def complete_task(task_oid: str) -> tuple[bool, str]:
+def _audit_log(action: str, task: dict, old_value: str = None, new_value: str = None):
+    """Fire-and-forget audit log call — never blocks the UI."""
     try:
-        r = requests.post(_backend(f"/quire/tasks/{task_oid}/complete"),
+        requests.post(
+            _backend("/quire/audit/log"),
+            headers=_headers(),
+            json={
+                "va_name":   st.session_state.get("va_name", "unknown"),
+                "action":    action,
+                "task_id":   task.get("id"),
+                "task_name": task.get("nameText") or task.get("name", ""),
+                "task_url":  task.get("url", ""),
+                "old_value": old_value,
+                "new_value": new_value,
+            },
+            timeout=5,
+        )
+    except Exception:
+        pass  # audit failure must never break the main action
+
+
+def complete_task(task: dict) -> tuple[bool, str]:
+    oid = task.get("oid", "")
+    try:
+        r = requests.post(_backend(f"/quire/tasks/{oid}/complete"),
                           headers=_headers(), timeout=10)
-        return (True, "") if r.ok else (False, f"HTTP {r.status_code}: {r.text[:300]}")
+        if r.ok:
+            _audit_log("complete", task)
+            return True, ""
+        return False, f"HTTP {r.status_code}: {r.text[:300]}"
     except requests.ConnectionError:
         return False, s("err_conn")
     except requests.Timeout:
         return False, "Timeout"
 
 
-def rename_task(task_oid: str, new_name: str) -> tuple[bool, str]:
+def rename_task(task: dict, new_name: str) -> tuple[bool, str]:
+    oid = task.get("oid", "")
+    old_name = task.get("nameText") or task.get("name", "")
     try:
-        r = requests.put(_backend(f"/quire/tasks/{task_oid}/rename"),
+        r = requests.put(_backend(f"/quire/tasks/{oid}/rename"),
                          headers=_headers(), json={"name": new_name}, timeout=10)
-        return (True, "") if r.ok else (False, f"HTTP {r.status_code}: {r.text[:300]}")
+        if r.ok:
+            _audit_log("rename", task, old_value=old_name, new_value=new_name)
+            return True, ""
+        return False, f"HTTP {r.status_code}: {r.text[:300]}"
     except requests.ConnectionError:
         return False, s("err_conn")
     except requests.Timeout:
         return False, "Timeout"
 
 
-def update_description(task_oid: str, description: str) -> tuple[bool, str]:
+def update_description(task: dict, description: str) -> tuple[bool, str]:
+    oid = task.get("oid", "")
+    old_desc = task.get("descriptionText") or task.get("description") or ""
     try:
-        r = requests.put(_backend(f"/quire/tasks/{task_oid}/description"),
+        r = requests.put(_backend(f"/quire/tasks/{oid}/description"),
                          headers=_headers(), json={"description": description}, timeout=10)
-        return (True, "") if r.ok else (False, f"HTTP {r.status_code}: {r.text[:300]}")
+        if r.ok:
+            _audit_log("description", task, old_value=old_desc, new_value=description)
+            return True, ""
+        return False, f"HTTP {r.status_code}: {r.text[:300]}"
     except requests.ConnectionError:
         return False, s("err_conn")
     except requests.Timeout:
@@ -275,7 +330,7 @@ def _task_card(t: dict, translated_name: str | None = None) -> None:
                     if not new_val.strip():
                         st.warning(s("err_empty_name"))
                     else:
-                        ok, err = rename_task(oid, new_val.strip())
+                        ok, err = rename_task(t, new_val.strip())
                         if ok:
                             st.session_state[f"edit_{oid}"] = False
                             fetch_tasks.clear()
@@ -305,7 +360,7 @@ def _task_card(t: dict, translated_name: str | None = None) -> None:
                     st.rerun()
             with col_done:
                 if st.button(s("complete_btn"), key=f"complete_{oid}"):
-                    ok, err = complete_task(oid)
+                    ok, err = complete_task(t)
                     if ok:
                         st.success(s("complete_ok"))
                         fetch_tasks.clear()
@@ -326,7 +381,7 @@ def _task_card(t: dict, translated_name: str | None = None) -> None:
             )
             if new_desc != current_desc:
                 if st.button(s("desc_save"), key=f"desc_save_{oid}"):
-                    ok, err = update_description(oid, new_desc)
+                    ok, err = update_description(t, new_desc)
                     if ok:
                         st.session_state.pop(desc_key, None)
                         fetch_tasks.clear()
@@ -439,11 +494,57 @@ def main():
             except Exception:
                 st.warning("Translation failed — showing original names.")
 
-    # ── render ──
-    if view == s("view_grouped"):
-        render_grouped(tasks, trans_map)
-    else:
-        render_flat(tasks, trans_map)
+    # ── tabs ──
+    tab_tasks, tab_audit = st.tabs([f"📋 {s('title')}", f"🕵️ {s('audit_tab')}"])
+
+    with tab_tasks:
+        if view == s("view_grouped"):
+            render_grouped(tasks, trans_map)
+        else:
+            render_flat(tasks, trans_map)
+
+    with tab_audit:
+        _render_audit()
+
+
+def _render_audit():
+    try:
+        r = requests.get(_backend("/quire/audit/log"),
+                         headers=_headers(), params={"limit": 200}, timeout=10)
+        entries = r.json().get("entries", []) if r.ok else []
+    except Exception:
+        st.error(s("err_conn"))
+        return
+
+    if not entries:
+        st.info(s("audit_empty"))
+        return
+
+    # filter by VA
+    va_names = sorted({e["va_name"] for e in entries})
+    col_f, _ = st.columns([2, 8])
+    with col_f:
+        chosen = st.selectbox(s("audit_filter"),
+                              [s("audit_all")] + va_names, label_visibility="collapsed")
+
+    if chosen != s("audit_all"):
+        entries = [e for e in entries if e["va_name"] == chosen]
+
+    for e in entries:
+        action_key, icon = AUDIT_ACTION_KEYS.get(e["action"], ("", "•"))
+        verb  = s(action_key) if action_key else e["action"]
+        name  = e.get("task_name") or ""
+        url   = e.get("task_url") or ""
+        task_link = f"[{name}]({url})" if url else name
+        ts    = (e.get("created_at") or "")[:16].replace("T", " ")
+        va    = e.get("va_name", "")
+
+        line = f"{icon} **{va}** {verb} {task_link}"
+        if e["action"] == "rename" and e.get("new_value"):
+            line += f" → *{e['new_value']}*"
+        st.markdown(line)
+        st.caption(ts)
+        st.divider()
 
 
 if __name__ == "__main__":
