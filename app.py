@@ -36,13 +36,21 @@ def fetch_tasks(project_id: str, tag: str, status: str) -> list[dict]:
     return r.json()["tasks"]
 
 
-def complete_task(task_oid: str) -> bool:
-    r = requests.post(
-        _backend(f"/quire/tasks/{task_oid}/complete"),
-        headers=_headers(),
-        timeout=10,
-    )
-    return r.ok
+def complete_task(task_oid: str) -> tuple[bool, str]:
+    """Returns (success, error_message)."""
+    try:
+        r = requests.post(
+            _backend(f"/quire/tasks/{task_oid}/complete"),
+            headers=_headers(),
+            timeout=10,
+        )
+        if r.ok:
+            return True, ""
+        return False, f"HTTP {r.status_code}: {r.text[:300]}"
+    except requests.ConnectionError:
+        return False, "Impossibile raggiungere il backend"
+    except requests.Timeout:
+        return False, "Timeout backend"
 
 
 def _priority_label(raw) -> str:
@@ -107,12 +115,13 @@ def render_tasks(tasks: list[dict]) -> None:
 
             with col_btn:
                 if st.button("Completa", key=f"complete_{oid}"):
-                    if complete_task(oid):
+                    ok, err = complete_task(oid)
+                    if ok:
                         st.success("Fatto!")
                         fetch_tasks.clear()
                         st.rerun()
                     else:
-                        st.error("Errore")
+                        st.error(err)
 
 
 # ── main ───────────────────────────────────────────────────────────────────
