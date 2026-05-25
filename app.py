@@ -49,6 +49,9 @@ STRINGS = {
         "group_later":     "Later",
         "group_nodate":    "No deadline",
         "lang_toggle":     "🇮🇹 Italiano",
+        "desc_placeholder":"Add a description...",
+        "desc_save":       "Save description",
+        "desc_empty":      "No description",
     },
     "it": {
         "title":           "Task Delegabili",
@@ -82,6 +85,9 @@ STRINGS = {
         "group_later":     "Più avanti",
         "group_nodate":    "Senza scadenza",
         "lang_toggle":     "🇬🇧 English",
+        "desc_placeholder":"Aggiungi una descrizione...",
+        "desc_save":       "Salva descrizione",
+        "desc_empty":      "Nessuna descrizione",
     },
 }
 
@@ -140,6 +146,17 @@ def rename_task(task_oid: str, new_name: str) -> tuple[bool, str]:
     try:
         r = requests.put(_backend(f"/quire/tasks/{task_oid}/rename"),
                          headers=_headers(), json={"name": new_name}, timeout=10)
+        return (True, "") if r.ok else (False, f"HTTP {r.status_code}: {r.text[:300]}")
+    except requests.ConnectionError:
+        return False, s("err_conn")
+    except requests.Timeout:
+        return False, "Timeout"
+
+
+def update_description(task_oid: str, description: str) -> tuple[bool, str]:
+    try:
+        r = requests.put(_backend(f"/quire/tasks/{task_oid}/description"),
+                         headers=_headers(), json={"description": description}, timeout=10)
         return (True, "") if r.ok else (False, f"HTTP {r.status_code}: {r.text[:300]}")
     except requests.ConnectionError:
         return False, s("err_conn")
@@ -247,6 +264,27 @@ def _task_card(t: dict, translated_name: str | None = None) -> None:
                     ok, err = complete_task(oid)
                     if ok:
                         st.success(s("complete_ok"))
+                        fetch_tasks.clear()
+                        st.rerun()
+                    else:
+                        st.error(err)
+
+            # ── description section ──
+            current_desc = t.get("descriptionText") or t.get("description") or ""
+            desc_key = f"desc_{oid}"
+            new_desc = st.text_area(
+                "",
+                value=st.session_state.get(desc_key, current_desc),
+                placeholder=s("desc_placeholder"),
+                key=f"textarea_{oid}",
+                height=80,
+                label_visibility="collapsed",
+            )
+            if new_desc != current_desc:
+                if st.button(s("desc_save"), key=f"desc_save_{oid}"):
+                    ok, err = update_description(oid, new_desc)
+                    if ok:
+                        st.session_state.pop(desc_key, None)
                         fetch_tasks.clear()
                         st.rerun()
                     else:
