@@ -426,42 +426,63 @@ def _task_card(t: dict, translated_name: str | None = None) -> None:
             if custom_fields:
                 st.divider()
                 for field_cfg in custom_fields:
-                    fkey    = field_cfg.get("key", "")
-                    flabel  = field_cfg.get("label", fkey)
-                    ftype   = field_cfg.get("type", "text")
-                    options = [o.strip() for o in field_cfg.get("options", "").split(",") if o.strip()]
-                    current = str(t.get(fkey) or "")
+                    fkey      = field_cfg.get("key", "")
+                    flabel    = field_cfg.get("label", fkey)
+                    ftype     = field_cfg.get("type", "text")
+                    readwrite = field_cfg.get("readwrite", False)
+                    options   = [o.strip() for o in str(field_cfg.get("options", "")).split(",") if o.strip()]
+                    current   = str(t.get(fkey) or "")
 
-                    input_key = f"field_{oid}_{fkey}"
+                    is_url = ftype in ("hyperlink", "url") or "url" in fkey.lower() or "link" in fkey.lower()
 
-                    if ftype == "checkbox":
-                        new_val = st.checkbox(flabel, value=(current.lower() == "true"), key=input_key)
-                        new_val_str = "true" if new_val else "false"
-                        if new_val_str != current:
-                            ok, err = update_field(t, fkey, new_val_str)
-                            if not ok:
-                                st.error(err)
-                    elif ftype == "select" and options:
-                        idx = options.index(current) if current in options else 0
-                        new_val = st.selectbox(flabel, options, index=idx, key=input_key)
-                        if new_val != current:
-                            if st.button(s("field_save"), key=f"field_save_{oid}_{fkey}"):
-                                ok, err = update_field(t, fkey, new_val)
-                                if ok:
-                                    fetch_tasks.clear()
-                                    st.rerun()
-                                else:
-                                    st.error(err)
+                    if not readwrite:
+                        # ── READ-ONLY display ──
+                        if is_url and current:
+                            st.markdown(f"**{flabel}:** [{current}]({current})")
+                        elif ftype == "checkbox":
+                            checked = "☑" if current.lower() == "true" else "☐"
+                            st.caption(f"**{flabel}:** {checked}")
+                        else:
+                            st.caption(f"**{flabel}:** {current or '—'}")
                     else:
-                        new_val = st.text_input(flabel, value=current, key=input_key)
-                        if new_val != current:
-                            if st.button(s("field_save"), key=f"field_save_{oid}_{fkey}"):
-                                ok, err = update_field(t, fkey, new_val or None)
-                                if ok:
-                                    fetch_tasks.clear()
-                                    st.rerun()
-                                else:
+                        # ── EDITABLE ──
+                        input_key = f"field_{oid}_{fkey}"
+
+                        if ftype == "checkbox":
+                            new_val = st.checkbox(flabel, value=(current.lower() == "true"), key=input_key)
+                            new_val_str = "true" if new_val else "false"
+                            if new_val_str != current:
+                                ok, err = update_field(t, fkey, new_val_str)
+                                if not ok:
                                     st.error(err)
+                        elif ftype == "select" and options:
+                            idx = options.index(current) if current in options else 0
+                            new_val = st.selectbox(flabel, options, index=idx, key=input_key)
+                            if new_val != current:
+                                if st.button(s("field_save"), key=f"fs_{oid}_{fkey}"):
+                                    ok, err = update_field(t, fkey, new_val)
+                                    if ok:
+                                        fetch_tasks.clear()
+                                        st.rerun()
+                                    else:
+                                        st.error(err)
+                        else:
+                            col_in, col_btn = st.columns([5, 1])
+                            with col_in:
+                                new_val = st.text_input(flabel, value=current,
+                                                        placeholder="https://..." if is_url else "",
+                                                        key=input_key)
+                            with col_btn:
+                                if is_url and new_val:
+                                    st.link_button("↗", new_val)
+                            if new_val != current:
+                                if st.button(s("field_save"), key=f"fs_{oid}_{fkey}"):
+                                    ok, err = update_field(t, fkey, new_val or None)
+                                    if ok:
+                                        fetch_tasks.clear()
+                                        st.rerun()
+                                    else:
+                                        st.error(err)
 
 
 # ── views ──────────────────────────────────────────────────────────────────
