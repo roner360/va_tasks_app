@@ -74,6 +74,8 @@ STRINGS = {
         "audit_action_complete":    "completed",
         "audit_action_rename":      "renamed",
         "audit_action_description": "updated description of",
+        "audit_action_field":       "updated field on",
+        "field_save":               "Save",
     },
     "it": {
         "title":           "Task Delegabili",
@@ -124,6 +126,8 @@ STRINGS = {
         "audit_action_complete":    "Ha completato",
         "audit_action_rename":      "Ha rinominato",
         "audit_action_description": "Ha modificato la descrizione di",
+        "audit_action_field":       "Ha aggiornato un campo di",
+        "field_save":               "Salva",
     },
 }
 
@@ -131,7 +135,17 @@ AUDIT_ACTION_KEYS = {
     "complete":    ("audit_action_complete",    "✅"),
     "rename":      ("audit_action_rename",      "✏️"),
     "description": ("audit_action_description", "📝"),
+    "field":       ("audit_action_field",       "🔧"),
 }
+
+
+def _va_custom_fields() -> list[dict]:
+    """Returns list of {key, label, type, options} from secrets."""
+    try:
+        raw = st.secrets.get("va_custom_fields", [])
+        return [dict(f) for f in raw]
+    except Exception:
+        return []
 
 def s(key: str) -> str:
     lang = st.session_state.get("lang", "en")
@@ -217,6 +231,24 @@ def rename_task(task: dict, new_name: str) -> tuple[bool, str]:
                          headers=_headers(), json={"name": new_name}, timeout=10)
         if r.ok:
             _audit_log("rename", task, old_value=old_name, new_value=new_name)
+            return True, ""
+        return False, f"HTTP {r.status_code}: {r.text[:300]}"
+    except requests.ConnectionError:
+        return False, s("err_conn")
+    except requests.Timeout:
+        return False, "Timeout"
+
+
+def update_field(task: dict, field_name: str, value: str | None) -> tuple[bool, str]:
+    oid = task.get("oid", "")
+    old_value = str(task.get(field_name) or "")
+    try:
+        r = requests.put(_backend(f"/quire/tasks/{oid}/field"),
+                         headers=_headers(),
+                         json={"field_name": field_name, "value": value},
+                         timeout=10)
+        if r.ok:
+            _audit_log("field", task, old_value=f"{field_name}={old_value}", new_value=f"{field_name}={value}")
             return True, ""
         return False, f"HTTP {r.status_code}: {r.text[:300]}"
     except requests.ConnectionError:
@@ -388,6 +420,48 @@ def _task_card(t: dict, translated_name: str | None = None) -> None:
                         st.rerun()
                     else:
                         st.error(err)
+
+            # ── custom fields ──
+            custom_fields = _va_custom_fields()
+            if custom_fields:
+                st.divider()
+                for field_cfg in custom_fields:
+                    fkey    = field_cfg.get("key", "")
+                    flabel  = field_cfg.get("label", fkey)
+                    ftype   = field_cfg.get("type", "text")
+                    options = [o.strip() for o in field_cfg.get("options", "").split(",") if o.strip()]
+                    current = str(t.get(fkey) or "")
+
+                    input_key = f"field_{oid}_{fkey}"
+
+                    if ftype == "checkbox":
+                        new_val = st.checkbox(flabel, value=(current.lower() == "true"), key=input_key)
+                        new_val_str = "true" if new_val else "false"
+                        if new_val_str != current:
+                            ok, err = update_field(t, fkey, new_val_str)
+                            if not ok:
+                                st.error(err)
+                    elif ftype == "select" and options:
+                        idx = options.index(current) if current in options else 0
+                        new_val = st.selectbox(flabel, options, index=idx, key=input_key)
+                        if new_val != current:
+                            if st.button(s("field_save"), key=f"field_save_{oid}_{fkey}"):
+                                ok, err = update_field(t, fkey, new_val)
+                                if ok:
+                                    fetch_tasks.clear()
+                                    st.rerun()
+                                else:
+                                    st.error(err)
+                    else:
+                        new_val = st.text_input(flabel, value=current, key=input_key)
+                        if new_val != current:
+                            if st.button(s("field_save"), key=f"field_save_{oid}_{fkey}"):
+                                ok, err = update_field(t, fkey, new_val or None)
+                                if ok:
+                                    fetch_tasks.clear()
+                                    st.rerun()
+                                else:
+                                    st.error(err)
 
 
 # ── views ──────────────────────────────────────────────────────────────────
