@@ -544,7 +544,8 @@ def main():
             st.rerun()
     with col_logout:
         if st.button(s("logout_btn")):
-            st.session_state.clear()
+            for key in ["va_name", "va_tag", "auth_ok"]:
+                st.session_state.pop(key, None)
             st.rerun()
 
     col_refresh, col_view, col_translate, col_info = st.columns([1, 2, 2, 5])
