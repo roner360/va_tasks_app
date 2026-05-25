@@ -12,6 +12,7 @@ Segreti attesi in .streamlit/secrets.toml:
 """
 import streamlit as st
 import requests
+from datetime import date, datetime
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
@@ -37,7 +38,6 @@ def fetch_tasks(project_id: str, tag: str, status: str) -> list[dict]:
 
 
 def complete_task(task_oid: str) -> tuple[bool, str]:
-    """Returns (success, error_message)."""
     try:
         r = requests.post(
             _backend(f"/quire/tasks/{task_oid}/complete"),
@@ -54,17 +54,37 @@ def complete_task(task_oid: str) -> tuple[bool, str]:
 
 
 def _priority_label(raw) -> str:
-    try:
-        return {-1: "Urgente", 0: "", 1: "Alta", 2: "Media", 3: "Bassa"}.get(
-            int(raw), str(raw or ""))
-    except (TypeError, ValueError):
-        return str(raw or "")
+    val = raw.get("value", 0) if isinstance(raw, dict) else raw
+    return {-1: "Urgente", 0: "", 1: "Alta", 2: "Media", 3: "Bassa"}.get(val, str(val or ""))
 
 
 def _status_label(raw) -> str:
     if isinstance(raw, dict):
         return raw.get("name", "")
     return str(raw) if raw is not None else ""
+
+
+def _due_date(t: dict) -> date | None:
+    raw = (t.get("due") or "")[:10]
+    try:
+        return datetime.strptime(raw, "%Y-%m-%d").date() if raw else None
+    except ValueError:
+        return None
+
+
+def _group_key(t: dict) -> tuple[int, str]:
+    """Returns (sort_order, label) for grouping by due date."""
+    d = _due_date(t)
+    today = date.today()
+    if d is None:
+        return (3, "Senza scadenza")
+    if d < today:
+        return (0, "Scaduti")
+    if d == today:
+        return (1, "Oggi")
+    if (d - today).days <= 7:
+        return (2, f"Questa settimana")
+    return (3, f"Più avanti")
 
 
 # ── password gate ──────────────────────────────────────────────────────────
@@ -85,43 +105,76 @@ def password_gate() -> bool:
     return False
 
 
-# ── task list ──────────────────────────────────────────────────────────────
+# ── single task card ───────────────────────────────────────────────────────
 
-def render_tasks(tasks: list[dict]) -> None:
+def _task_card(t: dict) -> None:
+    oid  = t.get("oid", "")
+    name = t.get("nameText") or t.get("name", "(senza nome)")
+    due  = (_due_date(t).strftime("%d/%m/%Y") if _due_date(t) else "")
+    prio = _priority_label(t.get("priority"))
+    stat = _status_label(t.get("status"))
+    url  = t.get("url", "")
+
+    with st.container(border=True):
+        col_name, col_meta, col_btn = st.columns([5, 3, 1])
+
+        with col_name:
+            st.markdown(f"**[{name}]({url})**" if url else f"**{name}**")
+
+        with col_meta:
+            parts = []
+            if stat: parts.append(f"Stato: {stat}")
+            if prio: parts.append(f"Priorità: {prio}")
+            if due:  parts.append(f"Scadenza: {due}")
+            st.caption("  ·  ".join(parts))
+
+        with col_btn:
+            if st.button("Completa", key=f"complete_{oid}"):
+                ok, err = complete_task(oid)
+                if ok:
+                    st.success("Fatto!")
+                    fetch_tasks.clear()
+                    st.rerun()
+                else:
+                    st.error(err)
+
+
+# ── views ──────────────────────────────────────────────────────────────────
+
+def render_flat(tasks: list[dict]) -> None:
     if not tasks:
-        st.info("Nessun task trovato con questo tag.")
+        st.info("Nessun task trovato.")
+        return
+    for t in tasks:
+        _task_card(t)
+
+
+def render_grouped(tasks: list[dict]) -> None:
+    if not tasks:
+        st.info("Nessun task trovato.")
         return
 
+    groups: dict[str, list] = {}
+    order:  dict[str, int]  = {}
     for t in tasks:
-        oid  = t.get("oid", "")
-        name = t.get("nameText") or t.get("name", "(senza nome)")
-        due  = (t.get("due") or "")[:10]
-        prio = _priority_label(t.get("priority"))
-        stat = _status_label(t.get("status"))
-        url  = t.get("url", "")
+        sort_n, label = _group_key(t)
+        groups.setdefault(label, []).append(t)
+        order[label] = sort_n
 
-        with st.container(border=True):
-            col_name, col_meta, col_btn = st.columns([5, 3, 1])
+    group_colors = {
+        "Scaduti":          "🔴",
+        "Oggi":             "🟠",
+        "Questa settimana": "🟡",
+        "Più avanti":       "🟢",
+        "Senza scadenza":   "⚪",
+    }
 
-            with col_name:
-                st.markdown(f"**[{name}]({url})**" if url else f"**{name}**")
-
-            with col_meta:
-                parts = []
-                if stat:   parts.append(f"Stato: {stat}")
-                if prio:   parts.append(f"Priorità: {prio}")
-                if due:    parts.append(f"Scadenza: {due}")
-                st.caption("  ·  ".join(parts))
-
-            with col_btn:
-                if st.button("Completa", key=f"complete_{oid}"):
-                    ok, err = complete_task(oid)
-                    if ok:
-                        st.success("Fatto!")
-                        fetch_tasks.clear()
-                        st.rerun()
-                    else:
-                        st.error(err)
+    for label in sorted(groups, key=lambda l: order[l]):
+        icon  = group_colors.get(label, "•")
+        count = len(groups[label])
+        with st.expander(f"{icon} **{label}** ({count})", expanded=(order[label] <= 1)):
+            for t in sorted(groups[label], key=lambda x: _due_date(x) or date.max):
+                _task_card(t)
 
 
 # ── main ───────────────────────────────────────────────────────────────────
@@ -138,11 +191,13 @@ def main():
 
     st.title(f"📋 Task delegabili  —  #{tag_name}")
 
-    col_btn, col_info = st.columns([1, 9])
-    with col_btn:
+    col_refresh, col_view, col_info = st.columns([1, 3, 6])
+    with col_refresh:
         if st.button("🔄 Refresh"):
             fetch_tasks.clear()
             st.rerun()
+    with col_view:
+        view = st.radio("Vista", ["Per scadenza", "Lista"], horizontal=True, label_visibility="collapsed")
 
     with st.spinner("Carico i task..."):
         try:
@@ -155,9 +210,12 @@ def main():
             return
 
     with col_info:
-        st.caption(f"{len(tasks)} task trovati · cache 5 min")
+        st.caption(f"{len(tasks)} task · cache 5 min")
 
-    render_tasks(tasks)
+    if view == "Per scadenza":
+        render_grouped(tasks)
+    else:
+        render_flat(tasks)
 
 
 if __name__ == "__main__":
