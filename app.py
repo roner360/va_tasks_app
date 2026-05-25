@@ -548,7 +548,8 @@ def main():
                 st.session_state.pop(key, None)
             st.rerun()
 
-    hide_future = st.secrets.get("HIDE_FUTURE_TASKS", True)
+    _hf_raw = st.secrets.get("HIDE_FUTURE_TASKS", True)
+    hide_future = str(_hf_raw).lower() not in ("false", "0", "no")
 
     col_refresh, col_view, col_translate, col_info = st.columns([1, 2, 2, 5])
     with col_refresh:
@@ -576,9 +577,8 @@ def main():
 
     # ── filter future tasks ──
     if hide_future:
-        from datetime import timedelta
-        cutoff = date.today() + timedelta(days=7)
-        tasks = [t for t in tasks if _due_date(t) is not None and _due_date(t) <= cutoff]
+        today = date.today()
+        tasks = [t for t in tasks if _due_date(t) is not None and _due_date(t) <= today]
 
     with col_info:
         st.caption(f"{len(tasks)} {s('cache_info')}")
