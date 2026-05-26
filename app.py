@@ -551,7 +551,10 @@ def main():
     _hf_raw = st.secrets.get("HIDE_FUTURE_TASKS", True)
     hide_future = str(_hf_raw).lower() not in ("false", "0", "no")
 
-    col_refresh, col_view, col_translate, col_info = st.columns([1, 2, 2, 5])
+    _ht_raw = st.secrets.get("HIDE_WITHOUT_TUTORIAL", False)
+    hide_no_tutorial_default = str(_ht_raw).lower() not in ("false", "0", "no")
+
+    col_refresh, col_view, col_tutorial, col_translate, col_info = st.columns([1, 2, 2, 2, 3])
     with col_refresh:
         if st.button(s("refresh")):
             fetch_tasks.clear()
@@ -561,6 +564,8 @@ def main():
         view = st.radio(s("view_label"),
                         [s("view_grouped"), s("view_flat")],
                         horizontal=True, label_visibility="collapsed")
+    with col_tutorial:
+        hide_no_tutorial = st.toggle("🎬 With tutorial only", value=hide_no_tutorial_default)
     with col_translate:
         translate_on = st.toggle(s("translate_toggle"), value=False)
 
@@ -579,6 +584,9 @@ def main():
     if hide_future:
         today = date.today()
         tasks = [t for t in tasks if _due_date(t) is not None and _due_date(t) <= today]
+
+    if hide_no_tutorial:
+        tasks = [t for t in tasks if t.get("youtube_tutorial")]
 
     with col_info:
         st.caption(f"{len(tasks)} {s('cache_info')}")
