@@ -133,6 +133,7 @@ STRINGS = {
 
 AUDIT_ACTION_KEYS = {
     "complete":    ("audit_action_complete",    "✅"),
+    "uncomplete":  ("audit_action_complete",    "↩️"),
     "rename":      ("audit_action_rename",      "✏️"),
     "description": ("audit_action_description", "📝"),
     "field":       ("audit_action_field",       "🔧"),
@@ -215,6 +216,21 @@ def complete_task(task: dict) -> tuple[bool, str]:
                           headers=_headers(), timeout=10)
         if r.ok:
             _audit_log("complete", task)
+            return True, ""
+        return False, f"HTTP {r.status_code}: {r.text[:300]}"
+    except requests.ConnectionError:
+        return False, s("err_conn")
+    except requests.Timeout:
+        return False, "Timeout"
+
+
+def uncomplete_task(task: dict) -> tuple[bool, str]:
+    oid = task.get("oid", "")
+    try:
+        r = requests.post(_backend(f"/quire/tasks/{oid}/uncomplete"),
+                          headers=_headers(), timeout=10)
+        if r.ok:
+            _audit_log("uncomplete", task)
             return True, ""
         return False, f"HTTP {r.status_code}: {r.text[:300]}"
     except requests.ConnectionError:
@@ -343,6 +359,12 @@ def login_gate() -> bool:
 
 # ── task card ──────────────────────────────────────────────────────────────
 
+def _is_completed(t: dict) -> bool:
+    raw = t.get("status")
+    val = raw.get("value", 0) if isinstance(raw, dict) else (raw or 0)
+    return int(val) >= 100
+
+
 def _task_card(t: dict, translated_name: str | None = None) -> None:
     oid       = t.get("oid", "")
     orig_name = t.get("nameText") or t.get("name", "")
@@ -351,6 +373,7 @@ def _task_card(t: dict, translated_name: str | None = None) -> None:
     prio      = _priority_label(t.get("priority"))
     stat      = _status_label(t.get("status"))
     url       = t.get("url", "")
+    completed = _is_completed(t)
     editing   = st.session_state.get(f"edit_{oid}", False)
 
     with st.container(border=True):
@@ -377,7 +400,10 @@ def _task_card(t: dict, translated_name: str | None = None) -> None:
             col_name, col_meta, col_edit, col_done = st.columns([4, 3, 1, 1])
             with col_name:
                 display = translated_name if translated_name else orig_name
-                st.markdown(f"**[{display}]({url})**" if url else f"**{display}**")
+                if completed:
+                    st.markdown(f"~~[{display}]({url})~~" if url else f"~~{display}~~")
+                else:
+                    st.markdown(f"**[{display}]({url})**" if url else f"**{display}**")
                 if translated_name:
                     st.caption(f"_{orig_name}_")
             with col_meta:
@@ -391,14 +417,23 @@ def _task_card(t: dict, translated_name: str | None = None) -> None:
                     st.session_state[f"edit_{oid}"] = True
                     st.rerun()
             with col_done:
-                if st.button(s("complete_btn"), key=f"complete_{oid}"):
-                    ok, err = complete_task(t)
-                    if ok:
-                        st.success(s("complete_ok"))
-                        fetch_tasks.clear()
-                        st.rerun()
-                    else:
-                        st.error(err)
+                if completed:
+                    if st.button("↩️", key=f"uncomplete_{oid}", help="Mark as active"):
+                        ok, err = uncomplete_task(t)
+                        if ok:
+                            fetch_tasks.clear()
+                            st.rerun()
+                        else:
+                            st.error(err)
+                else:
+                    if st.button(s("complete_btn"), key=f"complete_{oid}"):
+                        ok, err = complete_task(t)
+                        if ok:
+                            st.success(s("complete_ok"))
+                            fetch_tasks.clear()
+                            st.rerun()
+                        else:
+                            st.error(err)
 
             # ── description section (collapsible) ──
             current_desc = t.get("descriptionText") or t.get("description") or ""
@@ -554,7 +589,7 @@ def main():
     _ht_raw = st.secrets.get("HIDE_WITHOUT_TUTORIAL", False)
     hide_no_tutorial_default = str(_ht_raw).lower() not in ("false", "0", "no")
 
-    col_refresh, col_view, col_tutorial, col_translate, col_info = st.columns([1, 2, 2, 2, 3])
+    col_refresh, col_view, col_sort, col_tutorial, col_completed, col_translate = st.columns([1, 2, 2, 2, 2, 2])
     with col_refresh:
         if st.button(s("refresh")):
             fetch_tasks.clear()
@@ -564,15 +599,21 @@ def main():
         view = st.radio(s("view_label"),
                         [s("view_grouped"), s("view_flat")],
                         horizontal=True, label_visibility="collapsed")
+    with col_sort:
+        sort_by = st.selectbox("Sort", ["Due date", "Priority", "Name", "Last edited"],
+                               label_visibility="collapsed")
     with col_tutorial:
-        hide_no_tutorial = st.toggle("🎬 With tutorial only", value=hide_no_tutorial_default)
+        hide_no_tutorial = st.toggle("🎬 Tutorial only", value=hide_no_tutorial_default)
+    with col_completed:
+        show_completed = st.toggle("✅ Show completed", value=False)
     with col_translate:
         translate_on = st.toggle(s("translate_toggle"), value=False)
 
     # ── fetch tasks ──
+    fetch_status = "all" if show_completed else status
     with st.spinner(s("loading")):
         try:
-            tasks = fetch_tasks(project_id, tag_name, status)
+            tasks = fetch_tasks(project_id, tag_name, fetch_status)
         except requests.HTTPError as e:
             st.error(f"{s('err_backend')}: {e.response.status_code} — {e.response.text[:200]}")
             return
@@ -580,16 +621,30 @@ def main():
             st.error(s("err_conn"))
             return
 
-    # ── filter future tasks ──
+    # ── filters ──
+    if not show_completed:
+        tasks = [t for t in tasks if not _is_completed(t)]
     if hide_future:
         today = date.today()
         tasks = [t for t in tasks if _due_date(t) is not None and _due_date(t) <= today]
-
     if hide_no_tutorial:
         tasks = [t for t in tasks if t.get("youtube_tutorial")]
 
-    with col_info:
-        st.caption(f"{len(tasks)} {s('cache_info')}")
+    # ── sort ──
+    def _prio_val(t):
+        raw = t.get("priority")
+        return raw.get("value", 0) if isinstance(raw, dict) else (raw or 0)
+
+    if sort_by == "Priority":
+        tasks = sorted(tasks, key=lambda t: -_prio_val(t))
+    elif sort_by == "Name":
+        tasks = sorted(tasks, key=lambda t: (t.get("nameText") or t.get("name", "")).lower())
+    elif sort_by == "Last edited":
+        tasks = sorted(tasks, key=lambda t: t.get("editedAt") or "", reverse=True)
+    else:
+        tasks = sorted(tasks, key=lambda t: (_due_date(t) or date.max))
+
+    st.caption(f"{len(tasks)} {s('cache_info')}")
 
     # ── translations ──
     trans_map: dict = {}
